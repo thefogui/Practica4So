@@ -155,8 +155,13 @@ void process_line(char *line, RBTree *tree)
      int numFiles;
  };
 
- void put_small_tree_recursive(Node *x, RBTree *tree)
- {
+
+/*
+
+    Copy a tree into another tree
+
+*/
+void put_small_tree_recursive(Node *x, RBTree *tree){
      char *paraula_copy;
      int i;
      RBData *tree_data;
@@ -170,7 +175,7 @@ void process_line(char *line, RBTree *tree)
      tree_data = findNode(tree, x->data->key);
 
      if (tree_data != NULL) {
-         pthread_mutex_unlock(&count_mutex);
+         pthread_mutex_unlock(&count_mutex); //lock this section to make sure we don't acces it twice
          tree_data->num_vegades = tree_data->num_vegades + x->data->num_vegades;
          pthread_mutex_unlock(&count_mutex);
      } else {
@@ -182,7 +187,7 @@ void process_line(char *line, RBTree *tree)
          tree_data->key = paraula_copy;
          tree_data->num_vegades = 1;
          pthread_mutex_lock(&count_mutex);
-         insertNode(tree, tree_data);
+         insertNode(tree, tree_data); //put the data in the tree and lock it to make sure we don't acces the tree with another fil
          pthread_mutex_unlock(&count_mutex);
      }
  }
@@ -200,9 +205,9 @@ void *create_small_tree(void *arg){
      RBTree *local_tree;
 
      char line[MAXLINE], command[MAXLINE];
-     local_tree = (RBTree *) malloc(sizeof(RBTree));
+     local_tree = (RBTree *) malloc(sizeof(RBTree)); //create a local tree for this execution
      initTree(local_tree);
-     struct SmallTree *parameters = (struct SmallTree *) arg;
+     struct SmallTree *parameters = (struct SmallTree *) arg; //recupeare the parameters
 
      l = parameters->numFiles;
 
@@ -224,9 +229,11 @@ void *create_small_tree(void *arg){
 
          }
          pclose(fp_pipe);
+         //after analyzer the file we put the local tree in the global tree
          put_small_tree(global_tree, local_tree);
      }
      return NULL;
+     deleteTree(local_tree); //delete the local tree
  }
 
 RBTree *create_tree(char *filename)
@@ -285,9 +292,11 @@ RBTree *create_tree(char *filename)
     }
 
     lenFileName2 = 0;
-    parameter1 = malloc(sizeof(struct SmallTree));
+    parameter1 = malloc(sizeof(struct SmallTree)); //save the parameters for the local tree
     parameter2 = malloc(sizeof(struct SmallTree));
     lenFileName1 = 0;
+
+    //split the vector of files in half so we can call a fil for each half of the vector individually
     if (num_pdfs % 2 == 0){
         lenFileName1 = num_pdfs/2;
 
@@ -318,6 +327,8 @@ RBTree *create_tree(char *filename)
 
     parameter2->numFiles = lenFileName2;
 
+
+    //create 2 fil with the parameters and call the function create_small_tree
     pthread_create(&(ntid[0]), NULL, create_small_tree,  (void*)parameter1);
     pthread_create(&(ntid[1]), NULL, create_small_tree, (void*)parameter2);
 
@@ -326,7 +337,7 @@ RBTree *create_tree(char *filename)
 
     fclose(fp);
 
-    return global_tree;
+    return global_tree; //return the entire tree
 }
 
 /**
