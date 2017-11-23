@@ -9,11 +9,14 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <pthread.h>
 
 #include "red-black-tree.h"
 
 #define MAXLINE      200
 #define MAGIC_NUMBER 0x0133C8F9
+pthread_mutex_t count_mutex;
+RBTree *global_tree;
 
 /**
  *
@@ -147,19 +150,102 @@ void process_line(char *line, RBTree *tree)
  *
  */
 
+ struct SmallTree { //struct that saves the files and the number of files in the vector
+     char **filesToProcess;
+     int numFiles;
+ };
+
+ void put_small_tree_recursive(Node *x, RBTree *tree)
+ {
+     char *paraula_copy;
+     int i;
+     RBData *tree_data;
+
+     if (x->right != NIL)
+         put_small_tree_recursive(x->right, tree);
+
+     if (x->left != NIL)
+         put_small_tree_recursive(x->left, tree);
+
+     tree_data = findNode(tree, x->data->key);
+
+     if (tree_data != NULL) {
+         pthread_mutex_unlock(&count_mutex);
+         tree_data->num_vegades = tree_data->num_vegades + x->data->num_vegades;
+         pthread_mutex_unlock(&count_mutex);
+     } else {
+         i = strlen(x->data->key);
+         paraula_copy = malloc(sizeof(char) * (i));
+         strcpy(paraula_copy, x->data->key);
+
+         tree_data = malloc(sizeof(RBData));
+         tree_data->key = paraula_copy;
+         tree_data->num_vegades = 1;
+         pthread_mutex_lock(&count_mutex);
+         insertNode(tree, tree_data);
+         pthread_mutex_unlock(&count_mutex);
+     }
+ }
+
+
+void put_small_tree(RBTree *tree, RBTree *smallTree){
+
+    put_small_tree_recursive(smallTree->root, tree);
+
+}
+
+void *create_small_tree(void *arg){
+     int i, l;
+     FILE *fp_pipe;
+     RBTree *local_tree;
+
+     char line[MAXLINE], command[MAXLINE];
+     local_tree = (RBTree *) malloc(sizeof(RBTree));
+     initTree(local_tree);
+     struct SmallTree *parameters = (struct SmallTree *) arg;
+
+     l = parameters->numFiles;
+
+     for(i = 0; i < l; i++){
+         strcpy(line, parameters->filesToProcess[i]);
+         sprintf(command, "pdftotext %s -\n", line);
+         fp_pipe = popen(command, "r");
+         if (!fp_pipe){
+             printf("ERROR: no puc crear canonada per al fitxer %s.\n", line);
+             continue;
+         }
+         while (fgets(line, MAXLINE, fp_pipe) != NULL) {
+             /* Remove the \n at the end of the line */
+
+             line[strlen(line) - 1] = 0;
+
+             /* Process the line */
+             process_line(line, local_tree);
+
+         }
+         pclose(fp_pipe);
+         put_small_tree(global_tree, local_tree);
+     }
+     return NULL;
+ }
+
 RBTree *create_tree(char *filename)
 {
-    FILE *fp, *fp_pipe;
-    RBTree *tree;
+    FILE *fp;
 
-    int i, num_pdfs;
-    char line[MAXLINE], command[MAXLINE];
+
+    struct SmallTree *parameter1, *parameter2;
+    pthread_t ntid[2];
+
+    int i, num_pdfs, lenFileName1, lenFileName2, j;
+    char line[MAXLINE], **filesToProcess;
 
     /* Allocate memory for tree */
-    tree = (RBTree *) malloc(sizeof(RBTree));
+    global_tree = (RBTree *) malloc(sizeof(RBTree));
+
 
     /* Initialize the tree */
-    initTree(tree);
+    initTree(global_tree);
 
     /* Open filename that contains all PDF files */
     fp = fopen(filename, "r");
@@ -171,6 +257,8 @@ RBTree *create_tree(char *filename)
     /* Llegim el fitxer. Suposem que el fitxer esta en un format correcte */
     fgets(line, MAXLINE, fp);
     num_pdfs = atoi(line);
+
+    filesToProcess = (char **)malloc(sizeof(char*)*num_pdfs);
 
     /* Llegim els noms dels fitxers PDF a processar */
     for(i = 0; i < num_pdfs; i++)
@@ -191,31 +279,54 @@ RBTree *create_tree(char *filename)
          * stdout.  In addition, observe that we need to specify \n at the end of the
          * command to execute.
          */
-
-        sprintf(command, "pdftotext %s -\n", line);
-        fp_pipe = popen(command, "r");
-        if (!fp_pipe)
-        {
-            printf("ERROR: no puc crear canonada per al fitxer %s.\n", line);
-            continue;
-        }
-
-        while (fgets(line, MAXLINE, fp_pipe) != NULL) {
-            /* Remove the \n at the end of the line */
-
-            line[strlen(line) - 1] = 0;
-
-            /* Process the line */
-
-            process_line(line, tree);
-        }
-
-        pclose(fp_pipe);
+        lenFileName1 = strlen(line);
+        filesToProcess[i] = (char*)malloc(sizeof(char)*lenFileName1);
+        strcpy(filesToProcess[i], line);
     }
+
+    lenFileName2 = 0;
+    parameter1 = malloc(sizeof(struct SmallTree));
+    parameter2 = malloc(sizeof(struct SmallTree));
+    lenFileName1 = 0;
+    if (num_pdfs % 2 == 0){
+        lenFileName1 = num_pdfs/2;
+
+        parameter1->filesToProcess = (char**)malloc(sizeof(char*)*lenFileName1);
+        parameter2->filesToProcess = (char**)malloc(sizeof(char*)*lenFileName1);
+        memcpy(parameter1->filesToProcess, filesToProcess, lenFileName1*sizeof(char*));
+        memcpy(parameter2->filesToProcess, &filesToProcess[lenFileName1], lenFileName1*sizeof(char*));
+        lenFileName2 = lenFileName1;
+    }else{
+        lenFileName1 = num_pdfs/2;
+        lenFileName2 = lenFileName1 + 1;
+
+        parameter1->filesToProcess = (char**)malloc(sizeof(char*)*lenFileName1);
+        parameter2->filesToProcess = (char**)malloc(sizeof(char*)*lenFileName2);
+
+        j = 0;
+
+        for (i = 0; i < lenFileName1; i++){
+            j = strlen(filesToProcess[i]);
+            parameter1->filesToProcess[i] = malloc(sizeof(char*)*j);
+            strcpy(parameter1->filesToProcess[i], filesToProcess[i]);
+        }
+
+        memcpy(parameter2->filesToProcess, &filesToProcess[lenFileName1], lenFileName2*sizeof(char*));
+    }
+
+    parameter1->numFiles = lenFileName1;
+
+    parameter2->numFiles = lenFileName2;
+
+    pthread_create(&(ntid[0]), NULL, create_small_tree,  (void*)parameter1);
+    pthread_create(&(ntid[1]), NULL, create_small_tree, (void*)parameter2);
+
+    pthread_join(ntid[0], NULL);
+    pthread_join(ntid[1], NULL);
 
     fclose(fp);
 
-    return tree;
+    return global_tree;
 }
 
 /**
